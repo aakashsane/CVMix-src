@@ -65,6 +65,7 @@
   integer, parameter :: LANGMUIR_ENTRAINMENT_LWF16   = 1
   integer, parameter :: LANGMUIR_ENTRAINMENT_LF17    = 2
   integer, parameter :: LANGMUIR_ENTRAINMENT_RWHGK16 = 3
+  integer, parameter :: ML_DIFFUSIVITY_SHAPE = 5 ! ML_Diffusivity
 
 ! !PUBLIC MEMBER FUNCTIONS:
 
@@ -210,6 +211,7 @@
 
       real(cvmix_r8) :: CVt2              ! Tunable parameter for convection entrainment
                                           ! (Only used with StokesMOST)
+      logical        :: ML_diffusivity           ! ML_diffusivity
 
   end type cvmix_kpp_params_type
 
@@ -229,7 +231,8 @@ contains
                             old_vals, lEkman, lStokesMOST, lMonOb, lnoDGat1,     &
                             lenhanced_diff, lnonzero_surf_nonlocal,              &
                             Langmuir_mixing_str, Langmuir_entrainment_str,       &
-                            l_LMD_ws, CVmix_kpp_params_user)
+                            l_LMD_ws, ML_diffusivity,                            &
+                            CVmix_kpp_params_user)
 
 ! !DESCRIPTION:
 !  Initialization routine for KPP mixing.
@@ -261,6 +264,7 @@ contains
                                               lenhanced_diff,                 &
                                               lnonzero_surf_nonlocal,         &
                                               l_LMD_ws
+    logical, optional, intent(in) :: ML_diffusivity
 
 ! !OUTPUT PARAMETERS:
     type(cvmix_kpp_params_type), intent(inout), target, optional ::           &
@@ -452,6 +456,9 @@ contains
         case ('ParabolicNonLocal')
           call cvmix_put_kpp('MatchTechnique', CVMIX_KPP_PARABOLIC_NONLOCAL,  &
                              CVmix_kpp_params_user)
+        case ('ML_Diffusivity_Shape') ! ML_Diffusivity shape function
+          call cvmix_put_kpp('MatchTechnique', ML_DIFFUSIVITY_SHAPE, CVmix_kpp_params_user)
+
         case DEFAULT
           print*, "ERROR: ", trim(MatchTechnique), " is not a valid choice ", &
                   "for MatchTechnique!"
@@ -487,6 +494,13 @@ contains
        call cvmix_put_kpp('lStokesMOST', lStokesMOST, CVmix_kpp_params_user)
     else
       call cvmix_put_kpp('lStokesMOST', .false., CVmix_kpp_params_user)
+    end if
+
+    if (present(ML_diffusivity)) then ! ML_diffusivity somehwere here
+      call cvmix_put_kpp('ML_diffusivity', ML_diffusivity, CVmix_kpp_params_user)
+    else
+      print *, 'this loop is working'
+      call cvmix_put_kpp('ML_diffusivity', .false., CVmix_kpp_params_user)
     end if
 
     if (present(CVt2)) then
@@ -782,6 +796,7 @@ contains
     if (present(CVmix_kpp_params_user)) then
       CVmix_kpp_params_in => CVmix_kpp_params_user
     end if
+
     interp_type2   = CVmix_kpp_params_in%interp_type2
     MatchTechnique = CVmix_kpp_params_in%MatchTechnique
 
@@ -972,6 +987,21 @@ contains
         Tshape2   = Tshape
         Sshape2   = Sshape
       case (CVMIX_KPP_PARABOLIC_NONLOCAL)
+        ! Shape function is sigma*(1-sigma)^2 for gradient term
+        ! and (1-sigma)^2 for non-local term
+        Mshape(1) =  cvmix_zero
+        Mshape(2) =  cvmix_one
+        Mshape(3) = -real(2,cvmix_r8)
+        Mshape(4) =  cvmix_one
+        Tshape    = Mshape
+        Sshape    = Mshape
+        Tshape2(1) =  cvmix_one
+        Tshape2(2) = -real(2,cvmix_r8)
+        Tshape2(3) =  cvmix_one
+        Tshape2(4) =  cvmix_zero
+        Sshape2    = Tshape2
+
+      case (ML_DIFFUSIVITY_SHAPE) ! coefficients for ML_diffusivity
         ! Shape function is sigma*(1-sigma)^2 for gradient term
         ! and (1-sigma)^2 for non-local term
         Mshape(1) =  cvmix_zero
@@ -1452,6 +1482,8 @@ contains
         CVmix_kpp_params_out%lenhanced_diff = val
       case ('l_LMD_ws')
         CVmix_kpp_params_out%l_LMD_ws = val
+      case ('ML_diffusivity')
+        CVmix_kpp_params_out%ML_diffusivity = val
       case DEFAULT
         print*, "ERROR: ", trim(varname), " is not a boolean variable!"
         stop 1
