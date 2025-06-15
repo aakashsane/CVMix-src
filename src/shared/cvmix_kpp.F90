@@ -696,6 +696,12 @@ contains
 
   end subroutine cvmix_coeffs_kpp_wrap
 
+
+
+!!!! custom cvmix_coeffs routine for the machine learned diffusivity:
+
+
+
 !BOP
 
 ! !IROUTINE: cvmix_coeffs_kpp_low
@@ -814,21 +820,21 @@ contains
     interp_type2   = CVmix_kpp_params_in%interp_type2
     MatchTechnique = CVmix_kpp_params_in%MatchTechnique
 
-    ! Print the current MatchTechnique
-    select case (MatchTechnique)
-      case (CVMIX_KPP_SIMPLE_SHAPES)
-        print *, 'MatchTechnique: CVMIX_KPP_SIMPLE_SHAPES (SimpleShapes)'
-      case (CVMIX_KPP_PARABOLIC_NONLOCAL)
-        print *, 'MatchTechnique: CVMIX_KPP_PARABOLIC_NONLOCAL (ParabolicNonLocal)'
-      case (CVMIX_KPP_MATCH_BOTH)
-        print *, 'MatchTechnique: CVMIX_KPP_MATCH_BOTH (MatchBoth)'
-      case (CVMIX_KPP_MATCH_GRADIENT)
-        print *, 'MatchTechnique: CVMIX_KPP_MATCH_GRADIENT (MatchGradient)'
-      case (ML_DIFFUSIVITY_SHAPE)
-        print *, 'MatchTechnique: ML_DIFFUSIVITY_SHAPE (ML_Diffusivity_Shape)'
-      case default
-        print *, 'MatchTechnique: UNKNOWN (value = ', MatchTechnique, ')'
-    end select
+    ! Print the current MatchTechnique ! print match technique
+    !select case (MatchTechnique)
+    !  case (CVMIX_KPP_SIMPLE_SHAPES)
+    !    print *, 'MatchTechnique: CVMIX_KPP_SIMPLE_SHAPES (SimpleShapes)'
+    !  case (CVMIX_KPP_PARABOLIC_NONLOCAL)
+    !    print *, 'MatchTechnique: CVMIX_KPP_PARABOLIC_NONLOCAL (ParabolicNonLocal)'
+    !  case (CVMIX_KPP_MATCH_BOTH)
+    !    print *, 'MatchTechnique: CVMIX_KPP_MATCH_BOTH (MatchBoth)'
+    !  case (CVMIX_KPP_MATCH_GRADIENT)
+    !    print *, 'MatchTechnique: CVMIX_KPP_MATCH_GRADIENT (MatchGradient)'
+    !  case (ML_DIFFUSIVITY_SHAPE)
+    !    print *, 'MatchTechnique: ML_DIFFUSIVITY_SHAPE (ML_Diffusivity_Shape)'
+    !  case default
+    !    print *, 'MatchTechnique: UNKNOWN (value = ', MatchTechnique, ')'
+    ! end select
 
 
     ! Output values should be set to input values
@@ -1189,7 +1195,7 @@ contains
         OBL_Mdiff = cvmix_zero
         OBL_Tdiff = cvmix_zero
         OBL_Sdiff = cvmix_zero
-        sigma = -zw(1:nlev+1)/OBL_depth
+        sigma = -zw(1:nlev+1)/OBL_depth   ! sigma coordinate is evaluated here
         !     (3a) Compute turbulent scales throghout column
         call cvmix_kpp_compute_turbulent_scales(sigma, OBL_depth, surf_buoy,   &
                                                 surf_fric, XIone, w_m, w_s,    &
@@ -1197,14 +1203,33 @@ contains
 
         do kw=2,kwup
           !   (3b)/(5) Evaluate G(sigma) at each cell interface
-          print *,' this is working maybe'
-          MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
-          TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
-          SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
+          ! print *,' this is working maybe'
+
+          ! this is where the down-gradient is set:
+          ! <-- cubic poly..default
+          ! MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
+          ! TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
+          ! SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
+          ! cubic poly..default end-->
+          
+          ! ML-diffusivity modification: testing this
+          if (sigma(kw) .le. 0.5 ) then
+            MshapeAtS = sigma(kw)
+            TshapeAtS = sigma(kw)
+            SshapeAtS = sigma(kw)
+          else
+            MshapeAtS = cvmix_one - sigma(kw)
+            TshapeAtS = cvmix_one - sigma(kw)
+            SshapeAtS = cvmix_one - sigma(kw)
+          end if
+
+          print *,'location A, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
+
           ! The RWHGK16 Langmuir uses the shape function to shape the
           !  enhancement to the mixing coefficient.
-          ShapeNoMatchAtS = cvmix_math_evaluate_cubic(NMshape, sigma(kw))
+          !  ShapeNoMatchAtS = cvmix_math_evaluate_cubic(NMshape, sigma(kw))
           !   (3c) Compute nonlocal term at each cell interface
+
           if (.not.lstable) then
             GAtS = cvmix_math_evaluate_cubic(Tshape2, sigma(kw))
             Tnonlocal(kw) = CVmix_kpp_params_in%nonlocal_coeff*GAtS
@@ -1212,15 +1237,19 @@ contains
             Snonlocal(kw) = CVmix_kpp_params_in%nonlocal_coeff*GAtS
           end if
 
-          select case (CVMix_KPP_Params_in%Langmuir_Mixing_Opt)
-          case (LANGMUIR_MIXING_LWF16)
-            MixingCoefEnhancement = Langmuir_EFactor
-          case (LANGMUIR_MIXING_RWHGK16)
-            MixingCoefEnhancement = cvmix_one + ShapeNoMatchAtS/NMshapeMax * &
-                                    (Langmuir_EFactor - cvmix_one)
-          case default
-            MixingCoefEnhancement = cvmix_one
-          end select
+          !!! original code had Lngmuir enhancement, I am blocking it out
+          !select case (CVMix_KPP_Params_in%Langmuir_Mixing_Opt)
+          !case (LANGMUIR_MIXING_LWF16)
+          !  MixingCoefEnhancement = Langmuir_EFactor
+          !case (LANGMUIR_MIXING_RWHGK16)
+          !  MixingCoefEnhancement = cvmix_one + ShapeNoMatchAtS/NMshapeMax * &
+          !                          (Langmuir_EFactor - cvmix_one)
+          !case default
+          !  MixingCoefEnhancement = cvmix_one
+          !end select
+
+          MixingCoefEnhancement = cvmix_one ! keeping this as 1.
+
           !   (3d) Diffusivity = OBL_depth * (turbulent scale) * G(sigma)
           OBL_Mdiff(kw) = OBL_depth * w_m(kw) * MshapeAtS * MixingCoefEnhancement
           OBL_Tdiff(kw) = OBL_depth * w_s(kw) * TshapeAtS * MixingCoefEnhancement
@@ -1233,52 +1262,57 @@ contains
         MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma_ktup)
         TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma_ktup)
         SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma_ktup)
+
+        print *,'location B, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
+
         !     (4b) Compute turbulent scales at last cell center in OBL
         call cvmix_kpp_compute_turbulent_scales(sigma_ktup, OBL_depth, surf_buoy, &
                                           surf_fric, XIone, wm_ktup, ws_ktup, &
                                           CVmix_kpp_params_user)
-        if (CVMix_KPP_Params_in%Langmuir_Mixing_Opt &
-          .eq. LANGMUIR_MIXING_LWF16) then
-          ! enhance the turbulent velocity scale
-          wm_ktup = wm_ktup * Langmuir_EFactor
-          ws_ktup = ws_ktup * Langmuir_EFactor
-        end if
+
+        !if (CVMix_KPP_Params_in%Langmuir_Mixing_Opt &
+        !  .eq. LANGMUIR_MIXING_LWF16) then
+        !  ! enhance the turbulent velocity scale
+        !  wm_ktup = wm_ktup * Langmuir_EFactor
+        !  ws_ktup = ws_ktup * Langmuir_EFactor
+        !end if
         !     (4c) Diffusivity = OBL_depth * (turbulent scale) * G(sigma)
+
         Mdiff_ktup = OBL_depth * wm_ktup * MshapeAtS
         Tdiff_ktup = OBL_depth * ws_ktup * TshapeAtS
         Sdiff_ktup = OBL_depth * ws_ktup * SshapeAtS
 
-        if (CVmix_kpp_params_in%lenhanced_diff) then
-          if ((ktup.eq.kwup).or.(ktup.eq.kwup-1)) then
-            call cvmix_kpp_compute_enhanced_diff(Mdiff_ktup,                      &
-                                                Tdiff_ktup,                      &
-                                                Sdiff_ktup,                      &
-                                                Mdiff_out(ktup+1),               &
-                                                Tdiff_out(ktup+1),               &
-                                                Sdiff_out(ktup+1),               &
-                                                OBL_Mdiff(ktup+1),               &
-                                                OBL_Tdiff(ktup+1),               &
-                                                OBL_Sdiff(ktup+1),               &
-                                                Tnonlocal(ktup+1),               &
-                                                Snonlocal(ktup+1),               &
-                                                delta, lkteqkw=(ktup.eq.kwup))
-          else
-            print*, "ERROR: ktup should be either kwup or kwup-1!"
-            print*, "ktup = ", ktup, " and kwup = ", kwup
-            stop 1
-          end if
-        else
-          if ( kwup .eq. ktup ) then
-            OBL_Mdiff(ktup+1) = old_Mdiff(ktup+1)
-            OBL_Tdiff(ktup+1) = old_Tdiff(ktup+1)
-            OBL_Sdiff(ktup+1) = old_Sdiff(ktup+1)
-          end if
-        end if
+        !if (CVmix_kpp_params_in%lenhanced_diff) then
+        !  if ((ktup.eq.kwup).or.(ktup.eq.kwup-1)) then
+        !    call cvmix_kpp_compute_enhanced_diff(Mdiff_ktup,                      &
+        !                                        Tdiff_ktup,                      &
+        !                                        Sdiff_ktup,                      &
+        !                                        Mdiff_out(ktup+1),               &
+        !                                        Tdiff_out(ktup+1),               &
+        !                                        Sdiff_out(ktup+1),               &
+        !                                        OBL_Mdiff(ktup+1),               &
+        !                                        OBL_Tdiff(ktup+1),               &
+        !                                        OBL_Sdiff(ktup+1),               &
+        !                                        Tnonlocal(ktup+1),               &
+        !                                        Snonlocal(ktup+1),               &
+        !                                        delta, lkteqkw=(ktup.eq.kwup))
+        !  else
+        !    print*, "ERROR: ktup should be either kwup or kwup-1!"
+        !    print*, "ktup = ", ktup, " and kwup = ", kwup
+        !    stop 1
+        !  end if
+        !else
+        !  if ( kwup .eq. ktup ) then
+        !    OBL_Mdiff(ktup+1) = old_Mdiff(ktup+1)
+        !    OBL_Tdiff(ktup+1) = old_Tdiff(ktup+1)
+        !    OBL_Sdiff(ktup+1) = old_Sdiff(ktup+1)
+        !  end if
+        !end if
 
         ! (5)/(5) Combine interior and boundary coefficients
-        Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1) * 20.0
-        Tdiff_out(2:ktup+1) = OBL_Tdiff(2:ktup+1) * 20.0
-        Sdiff_out(2:ktup+1) = OBL_Sdiff(2:ktup+1) * 20.0
+        Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1)
+        Tdiff_out(2:ktup+1) = OBL_Tdiff(2:ktup+1)
+        Sdiff_out(2:ktup+1) = OBL_Sdiff(2:ktup+1)
 
 
         !!! case ML_diffusivity ends here
