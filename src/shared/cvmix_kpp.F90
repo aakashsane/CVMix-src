@@ -700,6 +700,304 @@ contains
 
 !!!! custom cvmix_coeffs routine for the machine learned diffusivity:
 
+! !IROUTINE: cvmix_coeffs_kpp_low_ML
+! !INTERFACE:
+
+  subroutine cvmix_coeffs_kpp_low_ML(Mdiff_out, Tdiff_out, Sdiff_out, zw, zt,    &
+                                  old_Mdiff, old_Tdiff, old_Sdiff, OBL_depth, &
+                                  kOBL_depth, Tnonlocal, Snonlocal, surf_fric,&
+                                  surf_buoy, nlev, max_nlev, Langmuir_EFactor,&
+                                  StokesXI,CVmix_kpp_params_user)
+
+  
+! !DESCRIPTION:
+!  Computes vertical diffusion coefficients for the KPP boundary layer mixing
+!  parameterization.
+!  used equations discovery shape function from Sane et al. 2025.
+!\\
+!\\
+
+! !INPUT PARAMETERS:
+    type(cvmix_kpp_params_type),  intent(in), optional, target ::             &
+                                            CVmix_kpp_params_user
+
+    integer,                               intent(in) :: nlev, max_nlev
+    real(cvmix_r8), dimension(max_nlev+1), intent(in) :: old_Mdiff,           &
+                                                         old_Tdiff,           &
+                                                         old_Sdiff,           &
+                                                         zw
+    real(cvmix_r8), dimension(max_nlev),   intent(in) :: zt
+    real(cvmix_r8),                        intent(in) :: OBL_depth,           &
+                                                         surf_fric,           &
+                                                         surf_buoy,           &
+                                                         kOBL_depth
+    ! Langmuir enhancement factor
+    real(cvmix_r8), intent(in), optional :: Langmuir_EFactor
+    real(cvmix_r8), intent(in), optional :: StokesXI
+! !INPUT/OUTPUT PARAMETERS:
+    real(cvmix_r8), dimension(max_nlev+1), intent(inout) :: Mdiff_out,        &
+                                                            Tdiff_out,        &
+                                                            Sdiff_out,        &
+                                                            Tnonlocal,        &
+                                                            Snonlocal
+
+!EOP
+!BOC
+
+    ! Local variables
+    type(cvmix_kpp_params_type), pointer :: CVmix_kpp_params_in
+
+    ! OBL_[MTS]diff are the diffusivities in the whole OBL
+    real(cvmix_r8), dimension(nint(kOBL_depth)) :: OBL_Mdiff, OBL_Tdiff,      &
+                                                   OBL_Sdiff
+
+    ! [MTS]diff_ktup are the enhanced diffusivity and viscosity values at the
+    ! deepest cell center above OBL_depth. Other _ktup vars are intermediary
+    ! variables needed to compute [MTS]diff_ktup
+    real(cvmix_r8) :: Mdiff_ktup, Tdiff_ktup, Sdiff_ktup
+    real(cvmix_r8) :: sigma_ktup, wm_ktup, ws_ktup
+
+    real(cvmix_r8) :: delta
+
+    real(cvmix_r8), dimension(nlev+1) :: sigma, w_m, w_s
+
+    ! [MTS]shape are the coefficients of the shape function in the gradient
+    ! term; [TS]shape2 are the coefficients for the nonlocal term;
+    ! NMshape is the coefficient for the no-matching case, an option to shape
+    ! a Langmuir enhancement
+    real(cvmix_r8), dimension(4) :: Mshape, Tshape, Sshape, Tshape2, Sshape2,&
+                                    NMshape
+
+    ! [MTS]shapeAt1 is value of shape function at sigma = 1
+    ! d[MTS]shapeAt1 is value of derivative of shape function at sigma = 1
+    ! (Used for matching the shape function at OBL depth)
+    real(cvmix_r8) :: MshapeAt1, TshapeAt1, SshapeAt1
+    real(cvmix_r8) :: dMshapeAt1, dTshapeAt1, dSshapeAt1
+
+    ! [MTS]shapeAtS is value of shape function at sigma = S
+    real(cvmix_r8) :: MshapeAtS, TshapeAtS, SshapeAtS, GAtS
+    ! Storing the maximum value of shape function for no-matching case
+    !  that is used as an option for Langmuir mixing
+    real(cvmix_r8), parameter :: NMshapeMax = 4./27.
+
+    ! [MTS]diff_OBL is value of diffusivity at OBL depth
+    ! d[MTS]diff_OBL is value of derivative of diffusivity at OBL depth
+    ! w[ms]_OBL is value of wm or ws at OBL depth
+    real(cvmix_r8) :: Mdiff_OBL, Tdiff_OBL, Sdiff_OBL
+    real(cvmix_r8) :: dMdiff_OBL, dTdiff_OBL, dSdiff_OBL
+    real(cvmix_r8) :: wm_OBL, ws_OBL, second_term
+
+    ! coefficients used for interpolation if interp_type2 is not 'LMD94'
+    real(kind=cvmix_r8), dimension(4) :: coeffs
+
+    ! Width of column kw_up and kw_up+1
+    real(cvmix_r8), dimension(2) :: col_widths, col_centers
+    real(cvmix_r8), dimension(2) :: Mdiff_vals, Tdiff_vals, Sdiff_vals
+
+    ! Constant from params
+    integer :: interp_type2, MatchTechnique
+
+    integer :: kw
+    logical :: lstable
+    integer :: ktup, & ! kt index of cell center above OBL_depth
+               kwup    ! kw index of iface above OBL_depth (= kt index of
+                       ! cell containing OBL_depth)
+
+    ! Parameters for Stokes_MOST ! but stokes is not used in this ML subroutines
+    !real(cvmix_r8) :: Gcomposite, Hsigma, sigh, T_NLenhance , S_NLenhance , XIone
+    real(cvmix_r8) :: XIone 
+
+    XIone = cvmix_one
+
+    CVmix_kpp_params_in => CVmix_kpp_params_saved
+    if (present(CVmix_kpp_params_user)) then
+      CVmix_kpp_params_in => CVmix_kpp_params_user
+    end if
+
+    interp_type2   = CVmix_kpp_params_in%interp_type2
+    MatchTechnique = CVmix_kpp_params_in%MatchTechnique
+
+    ! Output values should be set to input values
+    Mdiff_out = old_Mdiff
+    Tdiff_out = old_Tdiff
+    Sdiff_out = old_Sdiff
+
+    ! (1) Column-specific parameters
+    !
+    ! Stability => positive surface buoyancy flux
+    lstable = (surf_buoy.gt.cvmix_zero)
+
+    kwup = floor(kOBL_depth)
+    ktup = nint(kOBL_depth)-1
+
+    if (ktup.eq.nlev) then
+      ! OBL_depth between bottom cell center and ocean bottom, assume
+      ! zt(ktup+1) = ocn_bottom (which is zw(nlev+1)
+      delta = (OBL_depth+zt(ktup))/(zt(ktup)-zw(ktup+1))
+    else
+      delta = (OBL_depth+zt(ktup))/(zt(ktup)-zt(ktup+1))
+    end if
+
+    ! we only need nonlocal shape in the same format as original scheme:
+    !Tshape2(1) =  cvmix_one
+    !Tshape2(2) = -real(2,cvmix_r8)
+    !Tshape2(3) =  cvmix_one
+    !Tshape2(4) =  cvmix_zero
+    !Sshape2    = Tshape2
+
+    ! ML_diffusivity-(1). obtain turbulent velocity scales:
+    call cvmix_kpp_compute_turbulent_scales(cvmix_one, OBL_depth,         &
+                                                surf_buoy, surf_fric,         &
+                                                XIone, wm_OBL, ws_OBL,        &
+                                                CVmix_kpp_params_user)
+
+      !! ML_diffusivity-(2) Compute diffusivities at OBL depth (This is  copy of block 2b)
+
+      col_centers(1) = zt(kwup)
+      col_widths(1) = zw(kwup) - zw(kwup+1)
+      Mdiff_vals(1) = old_Mdiff(kwup+1)
+      Tdiff_vals(1) = old_Tdiff(kwup+1)
+      Sdiff_vals(1) = old_Sdiff(kwup+1)
+      if (kwup.eq.nlev) then
+        col_centers(2) = zw(kwup+1)
+        col_widths(2)  = 1.0_cvmix_r8 ! Value doesn't matter, will divide
+                                      ! into zero
+        Mdiff_vals(2)  = old_Mdiff(kwup+1)
+        Tdiff_vals(2)  = old_Tdiff(kwup+1)
+        Sdiff_vals(2)  = old_Sdiff(kwup+1)
+      else
+        col_centers(2) = zt(kwup+1)
+        col_widths(2)  = zw(kwup+1) - zw(kwup+2)
+        Mdiff_vals(2)  = old_Mdiff(kwup+2)
+        Tdiff_vals(2)  = old_Tdiff(kwup+2)
+        Sdiff_vals(2)  = old_Sdiff(kwup+2)
+      end if
+
+      if (kwup.eq.1) then
+        Mdiff_OBL = cvmix_kpp_compute_nu_at_OBL_depth_LMD94(col_centers,  &
+                                                  col_widths,             &
+                                                  Mdiff_vals, OBL_depth,  &
+                                                  dnu_dz=dMdiff_OBL)
+        Tdiff_OBL = cvmix_kpp_compute_nu_at_OBL_depth_LMD94(col_centers,  &
+                                                  col_widths,             &
+                                                  Tdiff_vals, OBL_depth,  &
+                                                  dnu_dz=dTdiff_OBL)
+        Sdiff_OBL = cvmix_kpp_compute_nu_at_OBL_depth_LMD94(col_centers,  &
+                                                  col_widths,             &
+                                                  Sdiff_vals, OBL_depth,  &
+                                                  dnu_dz=dSdiff_OBL)
+      else ! interp_type == 'LMD94' and kwup > 1
+        Mdiff_OBL = cvmix_kpp_compute_nu_at_OBL_depth_LMD94(col_centers,  &
+                                                  col_widths,             &
+                                                  Mdiff_vals, OBL_depth,  &
+                                                  old_Mdiff(kwup),        &
+                                                  dnu_dz=dMdiff_OBL)
+        Tdiff_OBL = cvmix_kpp_compute_nu_at_OBL_depth_LMD94(col_centers,  &
+                                                  col_widths,             &
+                                                  Tdiff_vals, OBL_depth,  &
+                                                  old_Tdiff(kwup),        &
+                                                  dnu_dz=dTdiff_OBL)
+        Sdiff_OBL = cvmix_kpp_compute_nu_at_OBL_depth_LMD94(col_centers,  &
+                                                  col_widths,             &
+                                                  Sdiff_vals, OBL_depth,  &
+                                                  old_Sdiff(kwup),        &
+                                                  dnu_dz=dSdiff_OBL)
+      end if
+
+
+      ! Compute G(1) [shape function when sigma = 1] and G'(1) for three
+      !      cases:
+      ! I have assumed that lnoDGat1 is zero for now. i.e. G'(1)=0, 
+      ! i.e. shape function has zero derivative at OBL_depth.
+
+      if (OBL_depth.eq.cvmix_zero) then
+        ! Values don't matter, K = 0
+        MshapeAt1 = cvmix_zero
+        TshapeAt1 = cvmix_zero
+        SshapeAt1 = cvmix_zero
+        dMshapeAt1 = cvmix_zero
+        dTshapeAt1 = cvmix_zero
+        dSshapeAt1 = cvmix_zero
+      else ! OBL_depth != 0
+        if (wm_OBL.ne.cvmix_zero) then
+          MshapeAt1 = Mdiff_OBL/(wm_OBL*OBL_depth)
+        else
+          MshapeAt1 = cvmix_zero ! value doesn't really matter, Km = 0
+        end if
+        if (ws_OBL.ne.cvmix_zero) then
+          TshapeAt1 = Tdiff_OBL/(ws_OBL*OBL_depth)
+          SshapeAt1 = Sdiff_OBL/(ws_OBL*OBL_depth)
+        else
+          TshapeAt1 = cvmix_zero ! value doesn't really matter, Ks = 0
+          SshapeAt1 = cvmix_zero ! value doesn't really matter, Ks = 0
+        end if
+
+        ! this is the lnoDGat1 = true case. sets G'(1) = 0 for momentum, heat, and salt
+        dMshapeAt1 = cvmix_zero
+        dTshapeAt1 = cvmix_zero
+        dSshapeAt1 = cvmix_zero
+
+        ! Gradient part is matched, use simple shape for non-local 
+        ! copied from block: if (MatchTechnique.eq.CVMIX_KPP_MATCH_GRADIENT) then
+        !                      !Only match for gradient term, use simple shape for nonlocal
+
+        Tshape2(1) =  cvmix_zero
+        Tshape2(2) =  cvmix_one
+        Tshape2(3) = -real(2,cvmix_r8)
+        Tshape2(4) =  cvmix_one
+        Sshape2 = Tshape2
+
+        ! (3) Use shape function to compute diffusivities throughout OBL
+        Tnonlocal = cvmix_zero
+        Snonlocal = cvmix_zero
+        OBL_Mdiff = cvmix_zero
+        OBL_Tdiff = cvmix_zero
+        OBL_Sdiff = cvmix_zero
+        sigma = -zw(1:nlev+1)/OBL_depth   ! sigma coordinate is evaluated here
+        !     (3a) Compute turbulent scales throghout column
+        call cvmix_kpp_compute_turbulent_scales(sigma, OBL_depth, surf_buoy,   &
+                                                surf_fric, XIone, w_m, w_s,    &
+                                                CVmix_kpp_params_user)
+
+        do kw=2,kwup ! <--this loops gives you shape function for down-gradient and non-local part
+          !   (3b)/(5) Evaluate G(sigma) at each cell interface         
+          ! ML-diffusivity modification: testing this
+          if (sigma(kw) .le. 0.5 ) then ! simple triangle shape function for testing
+            MshapeAtS = sigma(kw)
+            TshapeAtS = sigma(kw)
+            SshapeAtS = sigma(kw)
+          else
+            MshapeAtS = cvmix_one - sigma(kw)
+            TshapeAtS = cvmix_one - sigma(kw)
+            SshapeAtS = cvmix_one - sigma(kw)
+          end if
+
+          print *,'location A, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
+
+          !   (3c) Compute nonlocal term at each cell interface
+          if (.not.lstable) then
+            GAtS = cvmix_math_evaluate_cubic(Tshape2, sigma(kw))
+            Tnonlocal(kw) = CVmix_kpp_params_in%nonlocal_coeff*GAtS
+            GAtS = cvmix_math_evaluate_cubic(Sshape2, sigma(kw))
+            Snonlocal(kw) = CVmix_kpp_params_in%nonlocal_coeff*GAtS
+          end if
+
+          ixingCoefEnhancement = cvmix_one ! keeping this as 1.
+
+          !   (3d) Diffusivity = OBL_depth * (turbulent scale) * G(sigma)
+          OBL_Mdiff(kw) = OBL_depth * w_m(kw) * MshapeAtS * MixingCoefEnhancement
+          OBL_Tdiff(kw) = OBL_depth * w_s(kw) * TshapeAtS * MixingCoefEnhancement
+          OBL_Sdiff(kw) = OBL_depth * w_s(kw) * SshapeAtS * MixingCoefEnhancement
+        end do    ! end of this do loop -->
+
+
+        ! (5)/(5) Combine interior and boundary coefficients
+        Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1)
+        Tdiff_out(2:ktup+1) = OBL_Tdiff(2:ktup+1)
+        Sdiff_out(2:ktup+1) = OBL_Sdiff(2:ktup+1) ! done till here -AS
+
+   end subroutine cvmix_coeff_low_ML
+
 
 
 !BOP
@@ -1189,7 +1487,7 @@ contains
           Sshape2 = Sshape
         end if
 
-        ! (3) Use shape function to compute diffusivities throughout OBL
+        ! (3) Use shape function to compute diffusivities throughout OBL 
         Tnonlocal = cvmix_zero
         Snonlocal = cvmix_zero
         OBL_Mdiff = cvmix_zero
