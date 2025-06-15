@@ -469,6 +469,16 @@ contains
                          CVmix_kpp_params_user)
     end if
 
+        ! --- Add this block to ensure ML_diffusivity takes precedence ---
+    if (present(ML_diffusivity)) then ! ML_diffusivity
+      call cvmix_put_kpp('ML_diffusivity', ML_diffusivity, CVmix_kpp_params_user)
+      if (ML_diffusivity) then
+        call cvmix_put_kpp('MatchTechnique', ML_DIFFUSIVITY_SHAPE, CVmix_kpp_params_user)
+      end if
+    else
+      call cvmix_put_kpp('ML_diffusivity', .false., CVmix_kpp_params_user)
+    end if
+
     if (present(old_vals)) then
       select case (trim(old_vals))
         case ("overwrite")
@@ -498,8 +508,12 @@ contains
 
     if (present(ML_diffusivity)) then ! ML_diffusivity somehwere here
       call cvmix_put_kpp('ML_diffusivity', ML_diffusivity, CVmix_kpp_params_user)
+      !set MatchTechnique if ML_diffusivity=true and MatchTechnique not present
+      if (ML_diffusivity .and. .not. present(MatchTechnique)) then
+        call cvmix_put_kpp('MatchTechnique', ML_DIFFUSIVITY_SHAPE, CVmix_kpp_params_user)
+      end if
     else
-      print *, 'this loop is working'
+      !print *, 'this loop is working'
       call cvmix_put_kpp('ML_diffusivity', .false., CVmix_kpp_params_user)
     end if
 
@@ -799,6 +813,23 @@ contains
 
     interp_type2   = CVmix_kpp_params_in%interp_type2
     MatchTechnique = CVmix_kpp_params_in%MatchTechnique
+
+    ! Print the current MatchTechnique
+    select case (MatchTechnique)
+      case (CVMIX_KPP_SIMPLE_SHAPES)
+        print *, 'MatchTechnique: CVMIX_KPP_SIMPLE_SHAPES (SimpleShapes)'
+      case (CVMIX_KPP_PARABOLIC_NONLOCAL)
+        print *, 'MatchTechnique: CVMIX_KPP_PARABOLIC_NONLOCAL (ParabolicNonLocal)'
+      case (CVMIX_KPP_MATCH_BOTH)
+        print *, 'MatchTechnique: CVMIX_KPP_MATCH_BOTH (MatchBoth)'
+      case (CVMIX_KPP_MATCH_GRADIENT)
+        print *, 'MatchTechnique: CVMIX_KPP_MATCH_GRADIENT (MatchGradient)'
+      case (ML_DIFFUSIVITY_SHAPE)
+        print *, 'MatchTechnique: ML_DIFFUSIVITY_SHAPE (ML_Diffusivity_Shape)'
+      case default
+        print *, 'MatchTechnique: UNKNOWN (value = ', MatchTechnique, ')'
+    end select
+
 
     ! Output values should be set to input values
     Mdiff_out = old_Mdiff
@@ -1166,6 +1197,7 @@ contains
 
         do kw=2,kwup
           !   (3b)/(5) Evaluate G(sigma) at each cell interface
+          print *,' this is working maybe'
           MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
           TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
           SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
@@ -1244,9 +1276,9 @@ contains
         end if
 
         ! (5)/(5) Combine interior and boundary coefficients
-        Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1)
-        Tdiff_out(2:ktup+1) = OBL_Tdiff(2:ktup+1)
-        Sdiff_out(2:ktup+1) = OBL_Sdiff(2:ktup+1)
+        Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1) * 20.0
+        Tdiff_out(2:ktup+1) = OBL_Tdiff(2:ktup+1) * 20.0
+        Sdiff_out(2:ktup+1) = OBL_Sdiff(2:ktup+1) * 20.0
 
 
         !!! case ML_diffusivity ends here
