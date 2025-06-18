@@ -968,6 +968,20 @@ contains
                                               surf_fric, XIone, w_m, w_s,    &
                                               CVmix_kpp_params_user)
 
+      !!! calculate sigma_max --> the sigma location of maximum diffusivity
+      if B == 0, then ! for pure shear driven OBL
+         sigma_max = 0.3829  * (4.0/27.0) ! reducing its amplitude to that of KPP cubic
+         ! the value 0.3829 comes from sigma_max = 2*{c_14}/von_Karma, where c_14 is the 14th
+         ! coefficient in the Sane et al. 2025 paper. Its value is c_14 = 0.0785. 
+         ! This gives a constant sigma_max of 0.3829. This satisfies \kappa(z) = vonKarman * u_* z 
+         ! as per KPP (Large et al. 1994) for pure shear driven (no buoyancy forcing) condition. 
+         ! 4/27 reduces the amplitude of g(\sigma) from 1 to 4/27.
+      else
+         F_intermediate_function = 
+        sigma_max = 
+      end if
+      !!! \sigma_max has been set for the shape function.
+
       do kw=2,kwup ! <--this loops gives you shape function for down-gradient and non-local part
         !   (3b)/(5) Evaluate G(sigma) at each cell interface         
         ! ML-diffusivity modification: testing this
@@ -1002,7 +1016,7 @@ contains
       end do    ! end of this do loop -->
 
       ! (4) Compute the enhanced diffusivity
-      !   (4a) Compute shape function at last cell center in OBL
+      !   (4a) Compute shape function at last cell center in OBL  ! I think I should not use this section 4a?
       sigma_ktup = -zt(ktup)/OBL_depth
       MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma_ktup)
       TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma_ktup)
