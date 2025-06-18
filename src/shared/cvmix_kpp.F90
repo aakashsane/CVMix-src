@@ -980,7 +980,9 @@ contains
           TshapeAtS = cvmix_one - sigma(kw)
           SshapeAtS = cvmix_one - sigma(kw)
         end if
-
+        MshapeAtS = sigma(kw)*(cvmix_one - sigma(kw))**2.0
+        TshapeAtS = MshapeAtS
+        SshapeAtS = MshapeAtS
         print *,'location A, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
 
         !   (3c) Compute nonlocal term at each cell interface
@@ -999,6 +1001,68 @@ contains
         OBL_Sdiff(kw) = OBL_depth * w_s(kw) * SshapeAtS * MixingCoefEnhancement
       end do    ! end of this do loop -->
 
+      ! (4) Compute the enhanced diffusivity
+      !   (4a) Compute shape function at last cell center in OBL
+      sigma_ktup = -zt(ktup)/OBL_depth
+      MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma_ktup)
+      TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma_ktup)
+      SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma_ktup)
+      ! (4b) Compute turbulent scales at last cell center in OBL
+      call cvmix_kpp_compute_turbulent_scales(sigma_ktup, OBL_depth, surf_buoy, &
+                                       surf_fric, XIone, wm_ktup, ws_ktup, &
+                                       CVmix_kpp_params_user)
+
+      ! (4c) Diffusivity (at ktup) = OBL_depth * (turbulent scale) * G(sigma)
+       Mdiff_ktup = OBL_depth * wm_ktup * MshapeAtS
+       Tdiff_ktup = OBL_depth * ws_ktup * TshapeAtS
+       Sdiff_ktup = OBL_depth * ws_ktup * SshapeAtS
+
+      
+      !!! <---explanation: The following block:
+      !!! This block handles the matching (or blending) of diffusivity at the base of OBL,
+      !!! ensuring a smooth transition between the KPP-computed OBL values and the interior
+      !!! values.
+      !!! If enhanced diffusivity is enabled (lenhanced_diff = .true.):
+      !!! It checks if the cell center index just above the OBL base (ktup) 
+      !!! is either equal to the interface index just above the OBL base (kwup) 
+      !!! or one less (kwup-1). If so, it calls cvmix_kpp_compute_enhanced_diff, 
+      !!! which blends the OBL and interior diffusivities at the interface ktup+1 
+      !!! using a weighted average (see LMD94 Appendix D). This ensures a smooth transition 
+      !!! at the OBL base. The arguments passed include the diffusivity at the last OBL cell 
+      !!! center, the output arrays at ktup+1, the OBL and nonlocal terms at ktup+1, and the 
+      !!! blending weight delta. If not, it prints an error and stops, because this is an 
+      !!! unexpected grid configuration. If enhanced diffusivity is not enabled 
+      !!! (lenhanced_diff = .false.): If kwup == ktup, it simply sets the OBL diffusivity at 
+      !!! ktup+1 to the background (interior) value, with no blending.
+      !!! explanation ends --->| |<--- code block starts
+
+      if (CVmix_kpp_params_in%lenhanced_diff) then
+        if ((ktup.eq.kwup).or.(ktup.eq.kwup-1)) then
+          call cvmix_kpp_compute_enhanced_diff(Mdiff_ktup,                      &
+                                              Tdiff_ktup,                      &
+                                              Sdiff_ktup,                      &
+                                              Mdiff_out(ktup+1),               &
+                                              Tdiff_out(ktup+1),               &
+                                              Sdiff_out(ktup+1),               &
+                                              OBL_Mdiff(ktup+1),               &
+                                              OBL_Tdiff(ktup+1),               &
+                                              OBL_Sdiff(ktup+1),               &
+                                              Tnonlocal(ktup+1),               &
+                                              Snonlocal(ktup+1),               &
+                                              delta, lkteqkw=(ktup.eq.kwup))
+        else
+          print*, "ERROR: ktup should be either kwup or kwup-1!"
+          print*, "ktup = ", ktup, " and kwup = ", kwup
+          stop 1
+        end if
+        else
+        if ( kwup .eq. ktup ) then
+          OBL_Mdiff(ktup+1) = old_Mdiff(ktup+1)
+          OBL_Tdiff(ktup+1) = old_Tdiff(ktup+1)
+          OBL_Sdiff(ktup+1) = old_Sdiff(ktup+1)
+        end if
+      end if
+      !!! code block ends--->|
 
       ! (5)/(5) Combine interior and boundary coefficients
       Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1)
