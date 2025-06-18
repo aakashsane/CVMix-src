@@ -710,7 +710,7 @@ contains
   subroutine cvmix_coeffs_kpp_low_ML(Mdiff_out, Tdiff_out, Sdiff_out, zw, zt,    &
                                   old_Mdiff, old_Tdiff, old_Sdiff, OBL_depth, &
                                   kOBL_depth, Tnonlocal, Snonlocal, surf_fric,&
-                                  surf_buoy, nlev, max_nlev, CVmix_kpp_params_user)
+                                  surf_buoy, Coriolis, nlev, max_nlev, CVmix_kpp_params_user)
 
   
 ! !DESCRIPTION:
@@ -814,6 +814,11 @@ contains
 
     ! Parameters for Stokes_MOST
     real(cvmix_r8) :: Gcomposite, Hsigma, sigh, T_NLenhance , S_NLenhance , XIone 
+
+    ! Parameters for the machine learning part
+    real(cvmix_r8) :: g_sigma ! shape function at a sigma coordinate.
+    real(cvmix_r8) :: L_h ! Non-dimensional L_h = B*OBL_depth/u_*^3
+    real(cvmix_r8) :: E_h ! Non-dimensional E_h = OBL_depth * Coriolis /u_*
 
     XIone = cvmix_one
 
@@ -968,8 +973,12 @@ contains
                                               surf_fric, XIone, w_m, w_s,    &
                                               CVmix_kpp_params_user)
 
+      !!! Evaluating L_h and E_h
+      L_h = -surf_buoy * OBL_depth / (surf_fric ** 3.0)
+      E_h = OBL_depth * Coriolis / surf_fric
+
       !!! calculate sigma_max --> the sigma location of maximum diffusivity
-      if B == 0, then ! for pure shear driven OBL
+      if surf_buoy == 0, then ! for pure shear driven OBL
          sigma_max = 0.3829  * (4.0/27.0) ! reducing its amplitude to that of KPP cubic
          ! the value 0.3829 comes from sigma_max = 2*{c_14}/von_Karma, where c_14 is the 14th
          ! coefficient in the Sane et al. 2025 paper. Its value is c_14 = 0.0785. 
@@ -978,29 +987,32 @@ contains
          ! 4/27 reduces the amplitude of g(\sigma) from 1 to 4/27.
 
       else
-         F_intermediate_function = ( cvmix_one / ( c_3 + c_4 * exp(-1.0*(c_5 * L_h)) )  ) + c_6
-         sigma_max = cvmix_one / ( c1 + c2/(F * E_h)) 
+         F_intermediate_function = ( cvmix_one / ( 0.0712 + 0.4380 * exp(-1.0*(2.6821 * L_h)) ) ) + 1.5845
+         sigma_max = (F * E_h) / ( 1.7908*(F * E_h) + 0.6904)
       end if
       !!! \sigma_max has been set for the shape function.
+      !!! capping sigma_max between 0.1 and 0.7
+      sigma_max = min( max(sigma_max, 0.1), 0.7) 
 
       do kw=2,kwup ! <--this loops gives you shape function for down-gradient and non-local part
         !   (3b)/(5) Evaluate G(sigma) at each cell interface         
         ! ML-diffusivity modification: testing this
         if (sigma(kw) .le. sigma_max ) then ! ML based shape function
           ! quadratic part above sigma_max
-          MshapeAtS = sigma(kw)
-          TshapeAtS = sigma(kw)
-          SshapeAtS = sigma(kw)
+          g_sigma = (2.0*sigma(kw)/sigma_max) - (sigma(kw)/sigma_max)**2.0
+          MshapeAtS = g_sigma
+          TshapeAtS = g_sigma
+          SshapeAtS = g_sigma
         else
           ! cubic part below sigma_max
-          MshapeAtS = cvmix_one - sigma(kw)
-          TshapeAtS = cvmix_one - sigma(kw)
-          SshapeAtS = cvmix_one - sigma(kw)
+          g_sigma = 2.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**3.0 &
+                    - 3.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**2.0 &
+                    + cvmix_one
+          MshapeAtS = g_sigma
+          TshapeAtS = g_sigma
+          SshapeAtS = g_sigma
         end if
 
-        MshapeAtS = sigma(kw)*(cvmix_one - sigma(kw))**2.0
-        TshapeAtS = MshapeAtS
-        SshapeAtS = MshapeAtS
         print *,'location A, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
 
         !   (3c) Compute nonlocal term at each cell interface
