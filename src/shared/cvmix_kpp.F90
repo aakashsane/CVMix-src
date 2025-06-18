@@ -976,24 +976,28 @@ contains
          ! This gives a constant sigma_max of 0.3829. This satisfies \kappa(z) = vonKarman * u_* z 
          ! as per KPP (Large et al. 1994) for pure shear driven (no buoyancy forcing) condition. 
          ! 4/27 reduces the amplitude of g(\sigma) from 1 to 4/27.
+
       else
-         F_intermediate_function = 
-        sigma_max = 
+         F_intermediate_function = ( cvmix_one / ( c_3 + c_4 * exp(-1.0*(c_5 * L_h)) )  ) + c_6
+         sigma_max = cvmix_one / ( c1 + c2/(F * E_h)) 
       end if
       !!! \sigma_max has been set for the shape function.
 
       do kw=2,kwup ! <--this loops gives you shape function for down-gradient and non-local part
         !   (3b)/(5) Evaluate G(sigma) at each cell interface         
         ! ML-diffusivity modification: testing this
-        if (sigma(kw) .le. 0.5 ) then ! simple triangle shape function for testing
+        if (sigma(kw) .le. sigma_max ) then ! ML based shape function
+          ! quadratic part above sigma_max
           MshapeAtS = sigma(kw)
           TshapeAtS = sigma(kw)
           SshapeAtS = sigma(kw)
         else
+          ! cubic part below sigma_max
           MshapeAtS = cvmix_one - sigma(kw)
           TshapeAtS = cvmix_one - sigma(kw)
           SshapeAtS = cvmix_one - sigma(kw)
         end if
+
         MshapeAtS = sigma(kw)*(cvmix_one - sigma(kw))**2.0
         TshapeAtS = MshapeAtS
         SshapeAtS = MshapeAtS
