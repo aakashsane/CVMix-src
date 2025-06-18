@@ -667,6 +667,7 @@ contains
         CVmix_vars%BoundaryLayerDepth, CVmix_vars%kOBL_depth,                      &
         CVmix_vars%kpp_Tnonlocal_iface, CVmix_vars%kpp_Snonlocal_iface,            &
         CVmix_vars%SurfaceFriction, CVmix_vars%SurfaceBuoyancyForcing,             &
+        CVmix_vars%Coriolis,                                                       &
         nlev, max_nlev,                                                            &
         CVmix_kpp_params_user)
     else
@@ -737,12 +738,15 @@ contains
     ! Langmuir enhancement factor
     !real(cvmix_r8), intent(in), optional :: Langmuir_EFactor
     !real(cvmix_r8), intent(in), optional :: StokesXI
+    real(cvmix_r8), intent(in) :: Coriolis !Coriolis at tracer points MKS units [s-1]
 ! !INPUT/OUTPUT PARAMETERS:
     real(cvmix_r8), dimension(max_nlev+1), intent(inout) :: Mdiff_out,        &
                                                             Tdiff_out,        &
                                                             Sdiff_out,        &
                                                             Tnonlocal,        &
                                                             Snonlocal
+
+    
 
 !EOP
 !BOC
@@ -816,9 +820,12 @@ contains
     real(cvmix_r8) :: Gcomposite, Hsigma, sigh, T_NLenhance , S_NLenhance , XIone 
 
     ! Parameters for the machine learning part
+    real(cvmix_r8) :: sigma_max ! sigma coordinate of location of maximum diffusivity
     real(cvmix_r8) :: g_sigma ! shape function at a sigma coordinate.
     real(cvmix_r8) :: L_h ! Non-dimensional L_h = B*OBL_depth/u_*^3
     real(cvmix_r8) :: E_h ! Non-dimensional E_h = OBL_depth * Coriolis /u_*
+    real(cvmix_r8) :: F_inter_func ! Stands for F_intermediate_function,
+    ! Non-dimensional intermediate function used to calculate sigma_max
 
     XIone = cvmix_one
 
@@ -978,7 +985,7 @@ contains
       E_h = OBL_depth * Coriolis / surf_fric
 
       !!! calculate sigma_max --> the sigma location of maximum diffusivity
-      if surf_buoy == 0, then ! for pure shear driven OBL
+      if (surf_buoy == 0.0) then ! for pure shear driven OBL
          sigma_max = 0.3829  * (4.0/27.0) ! reducing its amplitude to that of KPP cubic
          ! the value 0.3829 comes from sigma_max = 2*{c_14}/von_Karma, where c_14 is the 14th
          ! coefficient in the Sane et al. 2025 paper. Its value is c_14 = 0.0785. 
@@ -987,8 +994,8 @@ contains
          ! 4/27 reduces the amplitude of g(\sigma) from 1 to 4/27.
 
       else
-         F_intermediate_function = ( cvmix_one / ( 0.0712 + 0.4380 * exp(-1.0*(2.6821 * L_h)) ) ) + 1.5845
-         sigma_max = (F * E_h) / ( 1.7908*(F * E_h) + 0.6904)
+         F_inter_func = ( cvmix_one / ( 0.0712 + 0.4380 * exp(-1.0*(2.6821 * L_h)) ) ) + 1.5845
+         sigma_max = (F_inter_func * E_h) / ( 1.7908*(F_inter_func * E_h) + 0.6904)
       end if
       !!! \sigma_max has been set for the shape function.
       !!! capping sigma_max between 0.1 and 0.7
