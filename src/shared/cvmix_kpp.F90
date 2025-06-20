@@ -986,12 +986,11 @@ contains
 
       !!! calculate sigma_max --> the sigma location of maximum diffusivity
       if (surf_buoy == 0.0) then ! for pure shear driven OBL
-         sigma_max = 0.3829  * (4.0/27.0) ! reducing its amplitude to that of KPP cubic
+         sigma_max = 0.3829  ! reducing its amplitude to that of KPP cubic
          ! the value 0.3829 comes from sigma_max = 2*{c_14}/von_Karma, where c_14 is the 14th
          ! coefficient in the Sane et al. 2025 paper. Its value is c_14 = 0.0785. 
          ! This gives a constant sigma_max of 0.3829. This satisfies \kappa(z) = vonKarman * u_* z 
          ! as per KPP (Large et al. 1994) for pure shear driven (no buoyancy forcing) condition. 
-         ! 4/27 reduces the amplitude of g(\sigma) from 1 to 4/27.
 
       else
          F_inter_func = ( cvmix_one / ( 0.0712 + 0.4380 * exp(-1.0*(2.6821 * L_h)) ) ) + 1.5845
@@ -1007,6 +1006,7 @@ contains
         if (sigma(kw) .le. sigma_max ) then ! ML based shape function
           ! quadratic part above sigma_max
           g_sigma = (2.0*sigma(kw)/sigma_max) - (sigma(kw)/sigma_max)**2.0
+          g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
           MshapeAtS = g_sigma
           TshapeAtS = g_sigma
           SshapeAtS = g_sigma
@@ -1015,12 +1015,11 @@ contains
           g_sigma = 2.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**3.0 &
                     - 3.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**2.0 &
                     + cvmix_one
+          g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
           MshapeAtS = g_sigma
           TshapeAtS = g_sigma
           SshapeAtS = g_sigma
         end if
-
-        print *,'location A, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
 
         !   (3c) Compute nonlocal term at each cell interface
         if (.not.lstable) then
@@ -1038,12 +1037,18 @@ contains
         OBL_Sdiff(kw) = OBL_depth * w_s(kw) * SshapeAtS * MixingCoefEnhancement
       end do    ! end of this do loop -->
 
-      ! (4) Compute the enhanced diffusivity
+      ! (4) Compute the enhanced diffusivity ! I am replacing this part for g(sigma(ktup))
       !   (4a) Compute shape function at last cell center in OBL  ! I think I should not use this section 4a?
       sigma_ktup = -zt(ktup)/OBL_depth
-      MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma_ktup)
-      TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma_ktup)
-      SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma_ktup)
+      
+      g_sigma = 2.0*((sigma_ktup - sigma_max)/(cvmix_one - sigma_max))**3.0 &
+                    - 3.0*((sigma_ktup - sigma_max)/(cvmix_one - sigma_max))**2.0 &
+                    + cvmix_one
+      g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
+      MshapeAtS = g_sigma
+      TshapeAtS = g_sigma
+      SshapeAtS = g_sigma
+
       ! (4b) Compute turbulent scales at last cell center in OBL
       call cvmix_kpp_compute_turbulent_scales(sigma_ktup, OBL_depth, surf_buoy, &
                                        surf_fric, XIone, wm_ktup, ws_ktup, &
@@ -1071,7 +1076,7 @@ contains
       !!! unexpected grid configuration. If enhanced diffusivity is not enabled 
       !!! (lenhanced_diff = .false.): If kwup == ktup, it simply sets the OBL diffusivity at 
       !!! ktup+1 to the background (interior) value, with no blending.
-      !!! explanation ends --->| |<--- code block starts
+      !!! explanation ends --->| |code block starts >>
 
       if (CVmix_kpp_params_in%lenhanced_diff) then
         if ((ktup.eq.kwup).or.(ktup.eq.kwup-1)) then
@@ -1092,14 +1097,27 @@ contains
           print*, "ktup = ", ktup, " and kwup = ", kwup
           stop 1
         end if
-        else
-        if ( kwup .eq. ktup ) then
-          OBL_Mdiff(ktup+1) = old_Mdiff(ktup+1)
-          OBL_Tdiff(ktup+1) = old_Tdiff(ktup+1)
-          OBL_Sdiff(ktup+1) = old_Sdiff(ktup+1)
+      else
+        !!! if ( kwup .eq. ktup ) then ! this was the default block from cvmix_coeffs_kpp_low
+        !!!  OBL_Mdiff(ktup+1) = old_Mdiff(ktup+1)
+        !!!  OBL_Tdiff(ktup+1) = old_Tdiff(ktup+1)
+        !!!  OBL_Sdiff(ktup+1) = old_Sdiff(ktup+1)
+        
+        !!! I have modified it to match the diffusivity at ktup+1 -Aakash
+       
+        if ( kwup .eq. ktup ) then ! 
+        ! Adds a linear profile of diffusivity from surface to ktup+1 to match diffusivity at ktup+1
+        ! This matches the diffusivity at ktup (evaluated above) to ktup+1 from the input which I think comes from previous time step or previous iteration, but it is in the input list of this subroutine
+        ! I am not yet sure of this logic yet, needs to be checked -A.S.
+          do kw=2,ktup  ! applies a linear addition from 1 to ktup+1
+
+            OBL_Mdiff(kw) = OBL_Mdiff(kw) + (old_Mdiff(ktup+1) / (ktup)) * (kw-cvmix_one)
+
+          end do
+
         end if
       end if
-      !!! code block ends--->|
+      !!! << code block ends
 
       ! (5)/(5) Combine interior and boundary coefficients
       Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1)
@@ -1705,8 +1723,6 @@ contains
         OBL_Sdiff(ktup+1) = old_Sdiff(ktup+1)
       end if
     end if
-
-    print *,'location B, kw, MshapeAtS >', kw, sigma(kw), MshapeAtS
 
     ! (5) Combine interior and boundary coefficients
     Mdiff_out(2:ktup+1) = OBL_Mdiff(2:ktup+1)
