@@ -677,7 +677,8 @@ contains
                                   old_Mdiff, old_Tdiff, old_Sdiff, OBL_depth, &
                                   kOBL_depth, Tnonlocal, Snonlocal, surf_fric,&
                                   surf_buoy, nlev, max_nlev, Langmuir_EFactor,&
-                                  StokesXI,CVmix_kpp_params_user)
+                                  StokesXI,CVmix_kpp_params_user,
+                                  Coriolis)
 
 ! !DESCRIPTION:
 !  Computes vertical diffusion coefficients for the KPP boundary layer mixing
@@ -708,6 +709,7 @@ contains
                                                             Sdiff_out,        &
                                                             Tnonlocal,        &
                                                             Snonlocal
+    real(cvmix_r8), intent(in), optional :: Coriolis
 
 !EOP
 !BOC
