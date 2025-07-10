@@ -1339,7 +1339,8 @@ contains
 
     do kw=2,kwup                                   ! OBL overwrite loop to kwup
     !     (3b) Evaluate G(sigma) >= 0  at each cell interface
-      Gcomposite = cvmix_kpp_composite_shape(sigma(kw))
+      print *,'site B is working'
+      Gcomposite = cvmix_kpp_composite_shape(sigma(kw), CVmix_kpp_params_user=CVmix_kpp_params_user)
       sigh   = MAX(CVmix_kpp_params_in%surf_layer_ext, MIN(sigma(kw) ,cvmix_one))
       Hsigma = ((sigh      - CVmix_kpp_params_in%surf_layer_ext) / &
                 (cvmix_one - CVmix_kpp_params_in%surf_layer_ext) )**2
@@ -1364,7 +1365,8 @@ contains
     ! (4) Compute the enhanced diffusivity
     !     (4a) Compute shape function at last cell center in OBL
     sigma_ktup = -zt(ktup)/OBL_depth
-    Gcomposite =  cvmix_kpp_composite_shape(sigma_ktup)
+    print *,'site A is working'
+    Gcomposite =  cvmix_kpp_composite_shape(sigma_ktup, CVmix_kpp_params_user=CVmix_kpp_params_user)
     sigh   = MAX(CVmix_kpp_params_in%surf_layer_ext, MIN(sigma_ktup ,cvmix_one))
     Hsigma = ( (sigh - CVmix_kpp_params_in%surf_layer_ext) / &
                  (cvmix_one - CVmix_kpp_params_in%surf_layer_ext) )**2
@@ -3797,6 +3799,7 @@ contains
 
     if (CVmix_kpp_params_in%ML_diffusivity) then  ! ML_diffusivity shape is inserted here
       if (sigma .lt. 0.5) then
+        print *, 'this is working!'
         cvmix_kpp_composite_shape = sig 
       else
          sig=MIN(sig, cvmix_one)
