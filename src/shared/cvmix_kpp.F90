@@ -660,17 +660,17 @@ contains
 
     call cvmix_put(CVmix_vars, 'kpp_transport', cvmix_zero, max_nlev)
 
-    if (CVmix_kpp_params_in%ML_diffusivity) then
-      call cvmix_coeffs_kpp_low_ML(new_Mdiff, new_Tdiff, new_Sdiff,                &
-        CVmix_vars%zw_iface, CVmix_vars%zt_cntr,                                   &
-        CVmix_vars%Mdiff_iface, CVmix_vars%Tdiff_iface, CVmix_vars%Sdiff_iface,    &
-        CVmix_vars%BoundaryLayerDepth, CVmix_vars%kOBL_depth,                      &
-        CVmix_vars%kpp_Tnonlocal_iface, CVmix_vars%kpp_Snonlocal_iface,            &
-        CVmix_vars%SurfaceFriction, CVmix_vars%SurfaceBuoyancyForcing,             &
-        CVmix_vars%Coriolis,                                                       &
-        nlev, max_nlev,                                                            &
-        CVmix_kpp_params_user)
-    else
+!    if (CVmix_kpp_params_in%ML_diffusivity) then
+!      call cvmix_coeffs_kpp_low_ML(new_Mdiff, new_Tdiff, new_Sdiff,                &
+!        CVmix_vars%zw_iface, CVmix_vars%zt_cntr,                                   &
+!        CVmix_vars%Mdiff_iface, CVmix_vars%Tdiff_iface, CVmix_vars%Sdiff_iface,    &
+!        CVmix_vars%BoundaryLayerDepth, CVmix_vars%kOBL_depth,                      &
+!        CVmix_vars%kpp_Tnonlocal_iface, CVmix_vars%kpp_Snonlocal_iface,            &
+!        CVmix_vars%SurfaceFriction, CVmix_vars%SurfaceBuoyancyForcing,             &
+!        CVmix_vars%Coriolis,                                                       &
+!        nlev, max_nlev,                                                            &
+!        CVmix_kpp_params_user)
+!    else
 
       call cvmix_coeffs_kpp(new_Mdiff, new_Tdiff, new_Sdiff,                    &
                           CVmix_vars%zw_iface, CVmix_vars%zt_cntr,            &
@@ -684,10 +684,10 @@ contains
                           CVmix_vars%SurfaceBuoyancyForcing,                  &
                           nlev, max_nlev,                                     &
                           CVmix_vars%LangmuirEnhancementFactor,               &
-                          CVmix_vars%StokesMostXi,                            &
+                          CVmix_vars%StokesMostXi, CVmix_vars%Coriolis,                        &
                           CVmix_kpp_params_user)
 
-    end if
+
 
     call cvmix_update_wrap(CVmix_kpp_params_in%handle_old_vals, max_nlev,     &
                            Mdiff_out = CVmix_vars%Mdiff_iface,                &
@@ -711,7 +711,8 @@ contains
   subroutine cvmix_coeffs_kpp_low_ML(Mdiff_out, Tdiff_out, Sdiff_out, zw, zt,    &
                                   old_Mdiff, old_Tdiff, old_Sdiff, OBL_depth, &
                                   kOBL_depth, Tnonlocal, Snonlocal, surf_fric,&
-                                  surf_buoy, Coriolis, nlev, max_nlev, CVmix_kpp_params_user)
+                                  surf_buoy, nlev, max_nlev, CVmix_kpp_params_user, &
+                                  Coriolis) ! added an optional parameter
 
   
 ! !DESCRIPTION:
@@ -738,7 +739,7 @@ contains
     ! Langmuir enhancement factor
     !real(cvmix_r8), intent(in), optional :: Langmuir_EFactor
     !real(cvmix_r8), intent(in), optional :: StokesXI
-    real(cvmix_r8), intent(in) :: Coriolis !Coriolis at tracer points MKS units [s-1]
+    real(cvmix_r8), intent(in), optional :: Coriolis !Coriolis at tracer points MKS units [s-1]
 ! !INPUT/OUTPUT PARAMETERS:
     real(cvmix_r8), dimension(max_nlev+1), intent(inout) :: Mdiff_out,        &
                                                             Tdiff_out,        &
@@ -1136,7 +1137,7 @@ contains
                                   old_Mdiff, old_Tdiff, old_Sdiff, OBL_depth, &
                                   kOBL_depth, Tnonlocal, Snonlocal, surf_fric,&
                                   surf_buoy, nlev, max_nlev, Langmuir_EFactor,&
-                                  StokesXI,CVmix_kpp_params_user)
+                                  StokesXI,Coriolis,CVmix_kpp_params_user)
 
 ! !DESCRIPTION:
 !  Computes vertical diffusion coefficients for the KPP boundary layer mixing
@@ -1161,6 +1162,7 @@ contains
     ! Langmuir enhancement factor
     real(cvmix_r8), intent(in), optional :: Langmuir_EFactor
     real(cvmix_r8), intent(in), optional :: StokesXI
+    real(cvmix_r8), intent(in), optional :: Coriolis
 ! !INPUT/OUTPUT PARAMETERS:
     real(cvmix_r8), dimension(max_nlev+1), intent(inout) :: Mdiff_out,        &
                                                             Tdiff_out,        &
@@ -3747,7 +3749,7 @@ contains
 ! !IROUTINE: cvmix_kpp_composite_shape
 ! !INTERFACE:
 
-  function cvmix_kpp_composite_shape( sigma , Gat1)
+  function cvmix_kpp_composite_shape( sigma , Gat1, CVmix_kpp_params_user)
 
 !  !DESCRIPTION:
 !   This function returns the value of the composite shape function for both
@@ -3762,8 +3764,14 @@ contains
     real(cvmix_r8),                    intent(in)  ::  sigma
     real(cvmix_r8), optional,          intent(in)  ::  Gat1
 
+    type(cvmix_kpp_params_type), intent(in), optional, target :: CVmix_kpp_params_user
+
+    type(cvmix_kpp_params_type),  pointer :: CVmix_kpp_params_in
+
 ! !OUTPUT PARAMETERS:
     real(cvmix_r8) :: cvmix_kpp_composite_shape
+
+
 
 !EOP
 !BOC
@@ -3785,6 +3793,15 @@ contains
     else
       sig = MIN( sigma , cvmix_one )
       cvmix_kpp_composite_shape = G_1 + (G_m-G_1) * ((1.-sig) / (1.-sig_m))**2
+    end if
+
+    if (CVmix_kpp_params_in%ML_diffusivity) then  ! ML_diffusivity shape is inserted here
+      if (sigma .lt. 0.5) then
+        cvmix_kpp_composite_shape = sig 
+      else
+         sig=MIN(sig, cvmix_one)
+         cvmix_kpp_composite_shape = cvmix_one - sig 
+      end if 
     end if
 
 !EOC
