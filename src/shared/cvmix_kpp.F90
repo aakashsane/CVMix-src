@@ -1230,6 +1230,14 @@ contains
     ! Parameters for Stokes_MOST
     real(cvmix_r8) :: Gcomposite, Hsigma, sigh, T_NLenhance , S_NLenhance , XIone
 
+    ! Parameters for the machine learning part
+    real(cvmix_r8) :: sigma_max ! sigma coordinate of location of maximum diffusivity
+    real(cvmix_r8) :: g_sigma ! shape function at a sigma coordinate.
+    real(cvmix_r8) :: L_h ! Non-dimensional L_h = B*OBL_depth/u_*^3
+    real(cvmix_r8) :: E_h ! Non-dimensional E_h = OBL_depth * Coriolis /u_*
+    real(cvmix_r8) :: F_inter_func ! Stands for F_intermediate_function,
+    ! Non-dimensional intermediate function used to calculate sigma_max
+
     ! Constant from params
     integer :: interp_type2, MatchTechnique
 
@@ -1649,11 +1657,47 @@ contains
     call cvmix_kpp_compute_turbulent_scales(sigma, OBL_depth, surf_buoy,   &
                                             surf_fric, XIone, w_m, w_s,    &
                                             CVmix_kpp_params_user)
+
+    if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity
+      !!! Evaluating L_h and E_h
+      L_h = -surf_buoy * OBL_depth / (surf_fric ** 3.0) ! OBL / Monin-Obukhov-Depth
+      E_h = OBL_depth * Coriolis / surf_fric ! OBL / Ekman Depth i.e. hf/u*
+      F_inter_func = ( cvmix_one / ( 0.0712 + 0.4380 * exp(-1.0*(2.6821 * L_h)) ) ) + 1.5845
+      sigma_max = (F_inter_func * E_h) / ( 1.7908*(F_inter_func * E_h) + 0.6904)
+      !!! capping sigma_max between 0.1 and 0.7
+      sigma_max = min( max(sigma_max, 0.1), 0.7)
+    endif                                       
     do kw=2,kwup
       !   (3b) Evaluate G(sigma) at each cell interface
-      MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
-      TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
-      SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
+
+      if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity 
+
+        ! ML-diffusivity modification: testing this
+        if (sigma(kw) .le. sigma_max ) then ! ML based shape function
+          ! quadratic part above sigma_max
+          g_sigma = (2.0*sigma(kw)/sigma_max) - (sigma(kw)/sigma_max)**2.0
+          g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
+          MshapeAtS = g_sigma
+          TshapeAtS = g_sigma
+          SshapeAtS = g_sigma
+        else
+          ! cubic part below sigma_max
+          g_sigma = 2.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**3.0 &
+                    - 3.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**2.0 &
+                    + cvmix_one
+          g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
+          MshapeAtS = g_sigma
+          TshapeAtS = g_sigma
+          SshapeAtS = g_sigma
+        end if
+
+      else
+
+        MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
+        TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
+        SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
+
+      endif
       ! The RWHGK16 Langmuir uses the shape function to shape the
       !  enhancement to the mixing coefficient.
       ShapeNoMatchAtS = cvmix_math_evaluate_cubic(NMshape, sigma(kw))
