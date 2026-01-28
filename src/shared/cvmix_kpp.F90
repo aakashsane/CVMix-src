@@ -65,6 +65,7 @@
   integer, parameter :: LANGMUIR_ENTRAINMENT_LWF16   = 1
   integer, parameter :: LANGMUIR_ENTRAINMENT_LF17    = 2
   integer, parameter :: LANGMUIR_ENTRAINMENT_RWHGK16 = 3
+  integer, parameter :: ML_DIFFUSIVITY_SHAPE = 5 ! ML_Diffusivity
 
 ! !PUBLIC MEMBER FUNCTIONS:
 
@@ -88,7 +89,7 @@
   public :: cvmix_kpp_compute_nu_at_OBL_depth_LMD94
   public :: cvmix_kpp_EFactor_model
   public :: cvmix_kpp_ustokes_SL_model
-
+  public :: cvmix_kpp_compute_ER_depth
 
   interface cvmix_coeffs_kpp
     module procedure cvmix_coeffs_kpp_low
@@ -210,6 +211,12 @@
 
       real(cvmix_r8) :: CVt2              ! Tunable parameter for convection entrainment
                                           ! (Only used with StokesMOST)
+      real(cvmix_r8) :: ER_Cb             ! Entrainment Rule TKE buoyancy production weight [nondim]
+      real(cvmix_r8) :: ER_Cs             ! Entrainment Rule TKE Stokes production weight [nondim]
+      real(cvmix_r8) :: ER_Cu             ! Entrainment Rule TKE shear production weight [nondim]
+
+      logical        :: ML_diffusivity    ! uses the Machine Learned equations to set diffusivity
+                                          ! from Sane et al. (2025) https://doi.org/10.31219/osf.io/uab7v_v2
 
   end type cvmix_kpp_params_type
 
@@ -229,7 +236,8 @@ contains
                             old_vals, lEkman, lStokesMOST, lMonOb, lnoDGat1,     &
                             lenhanced_diff, lnonzero_surf_nonlocal,              &
                             Langmuir_mixing_str, Langmuir_entrainment_str,       &
-                            l_LMD_ws, CVmix_kpp_params_user)
+                            l_LMD_ws, ML_diffusivity,                            &
+                            ER_Cb, ER_Cs, ER_Cu, CVmix_kpp_params_user)
 
 ! !DESCRIPTION:
 !  Initialization routine for KPP mixing.
@@ -247,7 +255,10 @@ contains
                                               zeta_s,                         &
                                               surf_layer_ext,                 &
                                               CVt2,                           &
-                                              Cv
+                                              Cv,                             &
+                                              ER_Cb,                          &
+                                              ER_Cs,                          &
+                                              ER_Cu
     character(len=*), optional, intent(in) :: interp_type,                    &
                                               interp_type2,                   &
                                               MatchTechnique,                 &
@@ -260,10 +271,9 @@ contains
                                               lnoDGat1,                       &
                                               lenhanced_diff,                 &
                                               lnonzero_surf_nonlocal,         &
-                                              l_LMD_ws
-
-! !OUTPUT PARAMETERS:
-    type(cvmix_kpp_params_type), intent(inout), target, optional ::           &
+                                              l_LMD_ws,                       &
+                                              ML_diffusivity
+    type(cvmix_kpp_params_type), optional, target, intent(inout) ::           &
                                               CVmix_kpp_params_user
 
 !EOP
@@ -272,6 +282,7 @@ contains
     real(cvmix_r8) :: zm, zs, a_m, a_s, c_m, c_s
     real(cvmix_r8) :: Cstar_loc, vonkar_loc, surf_layer_ext_loc
     real(cvmix_r8) :: nonlocal_coeff
+    real(cvmix_r8) :: ER_Cb_loc, ER_Cs_loc, ER_Cu_loc
 
     if (present(ri_crit)) then
       if (ri_crit.lt.cvmix_zero) then
@@ -452,6 +463,8 @@ contains
         case ('ParabolicNonLocal')
           call cvmix_put_kpp('MatchTechnique', CVMIX_KPP_PARABOLIC_NONLOCAL,  &
                              CVmix_kpp_params_user)
+        case ('ML_Diffusivity_Shape') ! ML_Diffusivity shape function
+          call cvmix_put_kpp('MatchTechnique', ML_DIFFUSIVITY_SHAPE, CVmix_kpp_params_user)
         case DEFAULT
           print*, "ERROR: ", trim(MatchTechnique), " is not a valid choice ", &
                   "for MatchTechnique!"
@@ -460,6 +473,16 @@ contains
     else
       call cvmix_put_kpp('MatchTechnique', CVMIX_KPP_SIMPLE_SHAPES,           &
                          CVmix_kpp_params_user)
+    end if
+
+    ! --- Add this block to for ML_diffusivity ---
+    if (present(ML_diffusivity)) then ! ML_diffusivity
+      call cvmix_put_kpp('ML_diffusivity', ML_diffusivity, CVmix_kpp_params_user)
+      if (ML_diffusivity) then
+        call cvmix_put_kpp('MatchTechnique', ML_DIFFUSIVITY_SHAPE, CVmix_kpp_params_user)
+      end if
+    else
+      call cvmix_put_kpp('ML_diffusivity', .false., CVmix_kpp_params_user)
     end if
 
     if (present(old_vals)) then
@@ -586,6 +609,24 @@ contains
     end if
 
     ! Initialize parameters for enhanced entrainment
+    if (present(ER_Cb)) then
+      ER_Cb_loc = ER_Cb
+    else
+      ER_Cb_loc = 0.96_cvmix_r8
+    end if
+    call cvmix_put_kpp('ER_Cb', ER_Cb_loc, CVmix_kpp_params_user)
+    if (present(ER_Cs)) then
+      ER_Cs_loc = ER_Cs
+    else
+      ER_Cs_loc = 0.038_cvmix_r8
+    end if
+    call cvmix_put_kpp('ER_Cs', ER_Cs_loc, CVmix_kpp_params_user)
+    if (present(ER_Cu)) then
+      ER_Cu_loc = ER_Cu
+    else
+      ER_Cu_loc = 0.023_cvmix_r8
+    end if
+    call cvmix_put_kpp('ER_Cu', ER_Cu_loc, CVmix_kpp_params_user)
     call cvmix_put_kpp('c_ST', 0.17_cvmix_r8, CVmix_kpp_params_user)
     call cvmix_put_kpp('c_CT', 0.15_cvmix_r8, CVmix_kpp_params_user)
     call cvmix_put_kpp('c_LT', 0.083_cvmix_r8, CVmix_kpp_params_user)
@@ -654,6 +695,7 @@ contains
                           nlev, max_nlev,                                     &
                           CVmix_vars%LangmuirEnhancementFactor,               &
                           CVmix_vars%StokesMostXi,                            &
+                          CVmix_vars%Coriolis,                                &
                           CVmix_kpp_params_user)
 
     call cvmix_update_wrap(CVmix_kpp_params_in%handle_old_vals, max_nlev,     &
@@ -677,7 +719,7 @@ contains
                                   old_Mdiff, old_Tdiff, old_Sdiff, OBL_depth, &
                                   kOBL_depth, Tnonlocal, Snonlocal, surf_fric,&
                                   surf_buoy, nlev, max_nlev, Langmuir_EFactor,&
-                                  StokesXI,CVmix_kpp_params_user)
+                                  StokesXI,Coriolis,CVmix_kpp_params_user)
 
 ! !DESCRIPTION:
 !  Computes vertical diffusion coefficients for the KPP boundary layer mixing
@@ -702,6 +744,7 @@ contains
     ! Langmuir enhancement factor
     real(cvmix_r8), intent(in), optional :: Langmuir_EFactor
     real(cvmix_r8), intent(in), optional :: StokesXI
+    real(cvmix_r8), intent(in), optional :: Coriolis ! required for ML_diffusivity
 ! !INPUT/OUTPUT PARAMETERS:
     real(cvmix_r8), dimension(max_nlev+1), intent(inout) :: Mdiff_out,        &
                                                             Tdiff_out,        &
@@ -768,6 +811,14 @@ contains
 
     ! Parameters for Stokes_MOST
     real(cvmix_r8) :: Gcomposite, Hsigma, sigh, T_NLenhance , S_NLenhance , XIone
+
+    ! Parameters for the machine learning part, ML_diffusivity
+    real(cvmix_r8) :: sigma_max ! sigma coordinate of location of maximum diffusivity
+    real(cvmix_r8) :: g_sigma ! shape function at a sigma coordinate.
+    real(cvmix_r8) :: L_h ! Non-dimensional L_h = B*OBL_depth/u_*^3
+    real(cvmix_r8) :: E_h ! Non-dimensional E_h = OBL_depth * Coriolis /u_*
+    real(cvmix_r8) :: F_inter_func ! Stands for F_intermediate_function,
+    ! Non-dimensional intermediate function used to calculate sigma_max
 
     ! Constant from params
     integer :: interp_type2, MatchTechnique
@@ -1183,11 +1234,46 @@ contains
     call cvmix_kpp_compute_turbulent_scales(sigma, OBL_depth, surf_buoy,   &
                                             surf_fric, XIone, w_m, w_s,    &
                                             CVmix_kpp_params_user)
+
+    
+    if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity
+      !!! Evaluating L_h and E_h
+      L_h = -surf_buoy * OBL_depth / (surf_fric ** 3.0) ! OBL / Monin-Obukhov-Depth
+      E_h = OBL_depth * Coriolis / surf_fric ! OBL / Ekman Depth i.e. hf/u*
+      F_inter_func = ( cvmix_one / ( 0.0712 + 0.4380 * exp(-1.0*(2.6821 * L_h)) ) ) + 1.5845
+      sigma_max = (F_inter_func * E_h) / ( 1.7908*(F_inter_func * E_h) + 0.6904)
+      !!! capping sigma_max between 0.1 and 0.7
+      sigma_max = min( max(sigma_max, 0.1), 0.7)
+    endif 
     do kw=2,kwup
       !   (3b) Evaluate G(sigma) at each cell interface
-      MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
-      TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
-      SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
+
+      if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity 
+
+        ! ML-diffusivity modification:
+        if (sigma(kw) .le. sigma_max ) then ! ML based shape function
+          ! quadratic part above sigma_max
+          g_sigma = (2.0*sigma(kw)/sigma_max) - (sigma(kw)/sigma_max)**2.0
+          g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
+          MshapeAtS = g_sigma
+          TshapeAtS = g_sigma
+          SshapeAtS = g_sigma
+        else
+          ! cubic part below sigma_max
+          g_sigma = 2.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**3.0 &
+                    - 3.0*((sigma(kw) - sigma_max)/(cvmix_one - sigma_max))**2.0 &
+                    + cvmix_one
+          g_sigma = g_sigma * (4.0/27.0) ! reduces the amplitude from 1 to 4/27 to match G(\sigma) of KPP
+          MshapeAtS = g_sigma
+          TshapeAtS = g_sigma
+          SshapeAtS = g_sigma
+        end if
+
+      else
+        MshapeAtS = cvmix_math_evaluate_cubic(Mshape, sigma(kw))
+        TshapeAtS = cvmix_math_evaluate_cubic(Tshape, sigma(kw))
+        SshapeAtS = cvmix_math_evaluate_cubic(Sshape, sigma(kw))
+      end if
       ! The RWHGK16 Langmuir uses the shape function to shape the
       !  enhancement to the mixing coefficient.
       ShapeNoMatchAtS = cvmix_math_evaluate_cubic(NMshape, sigma(kw))
@@ -1277,7 +1363,7 @@ contains
 ! !IROUTINE: cvmix_put_kpp_real
 ! !INTERFACE:
 
-  subroutine cvmix_put_kpp_real(varname, val, CVmix_kpp_params_user)
+ subroutine cvmix_put_kpp_real(varname, val, CVmix_kpp_params_user)
 
 ! !DESCRIPTION:
 !  Write a real value into a cvmix\_kpp\_params\_type variable.
@@ -1335,6 +1421,12 @@ contains
         CVmix_kpp_params_out%CVt2 = val
       case ('nonlocal_coeff')
         CVmix_kpp_params_out%nonlocal_coeff = val
+      case ('ER_Cb')
+        CVmix_kpp_params_out%ER_Cb = val
+      case ('ER_Cs')
+        CVmix_kpp_params_out%ER_Cs = val
+      case ('ER_Cu')
+        CVmix_kpp_params_out%ER_Cu = val
       case ('c_CT')
         CVmix_kpp_params_out%c_CT = val
       case ('c_ST')
@@ -1452,6 +1544,8 @@ contains
         CVmix_kpp_params_out%lenhanced_diff = val
       case ('l_LMD_ws')
         CVmix_kpp_params_out%l_LMD_ws = val
+      case ('ML_diffusivity')
+        CVmix_kpp_params_out%ML_diffusivity = val
       case DEFAULT
         print*, "ERROR: ", trim(varname), " is not a boolean variable!"
         stop 1
@@ -3507,5 +3601,138 @@ contains
 !EOC
 
   end subroutine cvmix_kpp_compute_StokesXi
+
+
+!BOP
+
+! !DESCRIPTION:
+! Use Entrainment Rule, BEdE_ER, To Find Entrainment Flux and Depth
+! for each assumed OBL_depth = cell centers,
+! until the boundary layer depth, ERdepth > 0 kER_depth are determined, OR
+! if there is no viable solution  ERdepth = -1 , kER_depth=-1
+
+  subroutine cvmix_kpp_compute_ER_depth( z_inter,Nsq,OBL_depth, &
+           uStar,Bsfc_ns,surfBuoy,StokesXI,BEdE_ER,ERdepth,  &
+           CVMix_kpp_params_user)
+
+! !INPUT PARAMETERS:
+  real(cvmix_r8), dimension(:), intent(in) :: &
+                 z_inter,                     & ! Interface heights <= 0  [m]
+                 Nsq                            ! Column of Buoyancy Gradients at interfaces
+  real(cvmix_r8), dimension(:), intent(in) :: &
+                 OBL_depth,                   & ! Array of assumed OBL depths >0 at cell centers [m]
+                 surfBuoy,                    & ! surface Buoyancy flux surface to OBL_depth
+                 StokesXI,                    & ! Stokes similarity parameter given OBL_depth
+                 BEdE_ER                        ! Parameterized Entrainment Rule given OBL_depth
+  real(cvmix_r8),  intent(in)    :: uStar       ! surface friction velocity [m s-1]
+  real(cvmix_r8),  intent(in)    :: Bsfc_ns     ! non-solar surface buoyancy flux boundary condition
+
+  type(cvmix_kpp_params_type), optional, target, intent(in) :: CVmix_kpp_params_user
+
+! !OUTPUT PARAMETERS:
+  real(cvmix_r8),  intent(out)   :: ERdepth      ! ER Boundary Layer Depth [m]
+
+!EOP
+!BOC
+
+  ! Local variables
+  integer ::  iz, nlev , kbl , kinv
+  real(cvmix_r8), dimension(size(OBL_depth)+1) :: zdepth, BEdE ! surface then cell-centers<0
+  real(cvmix_r8), dimension(size(z_inter)+1)   :: sigma, Bflux   ! interface values
+  real(cvmix_r8) :: ws_i, Cemp_Rs, Gsig_i, Fdelrho, Bnonlocal, sigE, maxNsq, BEnt
+  real(kind=cvmix_r8), dimension(4)            :: coeffs
+  type(cvmix_kpp_params_type), pointer :: CVmix_kpp_params_in
+
+  CVmix_kpp_params_in => CVmix_kpp_params_saved
+    if (present(CVmix_kpp_params_user)) then
+      CVmix_kpp_params_in => CVmix_kpp_params_user
+    end if
+
+  nlev      = size(OBL_depth)
+  Cemp_Rs   = 4.7_cvmix_r8
+  Fdelrho   = cvmix_one
+  maxNsq    = 0.0
+  do kbl = 2, nlev+1
+   if ( Nsq(kbl) > maxNsq ) then
+     kinv = kbl
+     maxNsq = Nsq(kbl)
+   endif
+  enddo
+
+!                             Set default output values (no solution)
+  ERdepth   = -cvmix_one
+!                             Set surface values
+  zdepth(1) = cvmix_zero
+  BEdE(1)   = cvmix_zero
+  sigma(:)  = cvmix_zero
+  Bflux(1)  = Bsfc_ns    ! non-solar surface buoyancy boundary condition for all kbl
+!                             Set OBL_depth(1)=top cell center values
+  zdepth(2) = -OBL_depth(1)
+  BEdE(2)   = cvmix_zero
+
+  do kbl = 2, nlev
+    zdepth(kbl+1)= -OBL_depth(kbl)
+    BEdE(kbl+1)  = cvmix_zero
+
+    sigma(kbl+1) = cvmix_one
+    Bflux(kbl+1) = cvmix_zero
+    sigma(kbl+2) = -z_inter(kbl+1)/OBL_depth(kbl)  ! > 1.0
+    Bflux(kbl+2) = cvmix_zero
+    Bnonlocal    = 0.5_cvmix_r8 * Cemp_Rs * (abs(surfBuoy(kbl)) - surfBuoy(kbl))
+
+    do iz = kbl,1,-1
+      if (iz .gt. 1) then
+        sigma(iz) = -z_inter(iz)/OBL_depth(kbl)    ! < 1.0
+        call cvmix_kpp_compute_turbulent_scales(sigma(iz), OBL_depth(kbl), surfBuoy(kbl), uStar, StokesXI(kbl), & !0d
+                     w_s=ws_i   ,   CVmix_kpp_params_user=CVmix_kpp_params_user)
+        Gsig_i   = cvmix_kpp_composite_shape(sigma(iz))
+        Bflux(iz) = Gsig_i * (OBL_depth(kbl) * ws_i * Nsq(iz) - Bnonlocal)
+      endif
+
+      ! find the peak
+      if ( (Bflux(iz+1) .gt. Bflux(iz+2)) .and. (Bflux(iz+1) .ge. Bflux(iz)) .and. &
+           (Bflux(iz+1) .gt. cvmix_zero) ) then
+        ! Find sigE (the root of the derivative of the quadratic polynomial
+        ! interpolating (sigma(i), Bflux(i)) for i in [iz, iz+1, iz+2])
+        ! Also find BEnt (value of quadratic at sigE)
+        ! call cvmix_math_poly_interp(coeffs, sigma(iz:iz+2), Bflux(iz:iz+2)) 
+        ! comment by Aakash: the above is the original line, 
+        ! it gives me errors so I changed it to below call. not sure if it is correct
+        call cvmix_math_poly_interp(coeffs, CVMIX_MATH_INTERP_QUAD,           &
+                                    sigma(iz:iz+1), Bflux(iz:iz+1),           &
+                                    sigma(iz+2), Bflux(iz+2))
+        ! coeffs(3) = 0 => sigma(iz), sigma(iz+1), and sigma(iz+2) are not unique values
+        ! so there interpolation returned a linear equation. In this case we select
+        ! (sigma(iz+1), Bflux(iz+1)) as the maximum.
+        if (coeffs(3) .eq. cvmix_zero) then
+          sigE = sigma(iz+1)
+          Bent = Bflux(iz+1)
+        else
+          sigE = -0.5_cvmix_r8 * (coeffs(2) / coeffs(3))
+          Bent = cvmix_math_evaluate_cubic(coeffs, sigE)
+        endif
+        Fdelrho = cvmix_one
+        BEdE(kbl+1) = Fdelrho*BEnt*sigE*OBL_depth(kbl)
+        exit ! No exit leaves BEdE(kbl+1) = cvmix_zero
+      endif
+    enddo
+
+    if ( (BEdE(kbl+1) > BEdE_ER(kbl)) .and. (Bsfc_ns < cvmix_zero) ) then
+      call cvmix_math_poly_interp(coeffs, CVmix_kpp_params_in%interp_type,  &
+                     zdepth(kbl:kbl+1) , BEdE(kbl:kbl+1),   &
+                     zdepth(kbl-1) , BEdE(kbl-1)    )   ! surface values if  kbl=2;
+      coeffs(1) = coeffs(1) - BEdE_ER(kbl)
+      ERdepth = -cvmix_math_cubic_root_find(coeffs, 0.5_cvmix_r8 *          &
+                                      (zdepth(kbl)+zdepth(kbl+1)))
+
+      exit
+    endif
+
+  enddo
+
+!EOC
+
+  end subroutine cvmix_kpp_compute_ER_depth
+
 
 end module cvmix_kpp
