@@ -1244,11 +1244,11 @@ contains
       sigma_max = (F_inter_func * E_h) / ( 1.7908*(F_inter_func * E_h) + 0.6904)
       !!! capping sigma_max between 0.1 and 0.7
       sigma_max = min( max(sigma_max, 0.1), 0.7)
-    endif 
+    endif
     do kw=2,kwup
       !   (3b) Evaluate G(sigma) at each cell interface
 
-      if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity 
+      if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity
 
         ! ML-diffusivity modification:
         if (sigma(kw) .le. sigma_max ) then ! ML based shape function
