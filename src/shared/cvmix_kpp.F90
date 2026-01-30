@@ -273,7 +273,9 @@ contains
                                               lnonzero_surf_nonlocal,         &
                                               l_LMD_ws,                       &
                                               ML_diffusivity
-    type(cvmix_kpp_params_type), optional, target, intent(inout) ::           &
+
+! !OUTPUT PARAMETERS:
+    type(cvmix_kpp_params_type), intent(inout), target, optional ::           &
                                               CVmix_kpp_params_user
 
 !EOP
@@ -283,7 +285,6 @@ contains
     real(cvmix_r8) :: Cstar_loc, vonkar_loc, surf_layer_ext_loc
     real(cvmix_r8) :: ER_Cb_loc, ER_Cs_loc, ER_Cu_loc
     real(cvmix_r8) :: nonlocal_coeff
-    real(cvmix_r8) :: ER_Cb_loc, ER_Cs_loc, ER_Cu_loc
 
     if (present(ri_crit)) then
       if (ri_crit.lt.cvmix_zero) then
@@ -1236,7 +1237,7 @@ contains
                                             surf_fric, XIone, w_m, w_s,    &
                                             CVmix_kpp_params_user)
 
-    
+
     if (CVmix_kpp_params_in%ML_diffusivity) then ! ML_diffusivity
       !!! Evaluating L_h and E_h
       L_h = -surf_buoy * OBL_depth / (surf_fric ** 3.0) ! OBL / Monin-Obukhov-Depth
@@ -3712,136 +3713,8 @@ contains
         ! Find sigE (the root of the derivative of the quadratic polynomial
         ! interpolating (sigma(i), Bflux(i)) for i in [iz, iz+1, iz+2])
         ! Also find BEnt (value of quadratic at sigE)
-        call cvmix_math_poly_interp(coeffs, sigma(iz:iz+2), Bflux(iz:iz+2))
-        ! coeffs(3) = 0 => sigma(iz), sigma(iz+1), and sigma(iz+2) are not unique values
-        ! so there interpolation returned a linear equation. In this case we select
-        ! (sigma(iz+1), Bflux(iz+1)) as the maximum.
-        if (coeffs(3) .eq. cvmix_zero) then
-          sigE = sigma(iz+1)
-          Bent = Bflux(iz+1)
-        else
-          sigE = -0.5_cvmix_r8 * (coeffs(2) / coeffs(3))
-          Bent = cvmix_math_evaluate_cubic(coeffs, sigE)
-        endif
-        Fdelrho = cvmix_one
-        BEdE(kbl+1) = Fdelrho*BEnt*sigE*OBL_depth(kbl)
-        exit ! No exit leaves BEdE(kbl+1) = cvmix_zero
-      endif
-    enddo
-
-    if ( (BEdE(kbl+1) > BEdE_ER(kbl)) .and. (Bsfc_ns < cvmix_zero) ) then
-      call cvmix_math_poly_interp(coeffs, CVmix_kpp_params_in%interp_type,  &
-                     zdepth(kbl:kbl+1) , BEdE(kbl:kbl+1),   &
-                     zdepth(kbl-1) , BEdE(kbl-1)    )   ! surface values if  kbl=2;
-      coeffs(1) = coeffs(1) - BEdE_ER(kbl)
-      ERdepth = -cvmix_math_cubic_root_find(coeffs, 0.5_cvmix_r8 *          &
-                                      (zdepth(kbl)+zdepth(kbl+1)))
-
-      exit
-    endif
-
-  enddo
-
-!EOC
-
-  end subroutine cvmix_kpp_compute_ER_depth
-
-
-
-!BOP
-
-! !DESCRIPTION:
-! Use Entrainment Rule, BEdE_ER, To Find Entrainment Flux and Depth
-! for each assumed OBL_depth = cell centers,
-! until the boundary layer depth, ERdepth > 0 kER_depth are determined, OR
-! if there is no viable solution  ERdepth = -1 , kER_depth=-1
-
-  subroutine cvmix_kpp_compute_ER_depth( z_inter,Nsq,OBL_depth, &
-           uStar,Bsfc_ns,surfBuoy,StokesXI,BEdE_ER,ERdepth,  &
-           CVMix_kpp_params_user)
-
-! !INPUT PARAMETERS:
-  real(cvmix_r8), dimension(:), intent(in) :: &
-                 z_inter,                     & ! Interface heights <= 0  [m]
-                 Nsq                            ! Column of Buoyancy Gradients at interfaces
-  real(cvmix_r8), dimension(:), intent(in) :: &
-                 OBL_depth,                   & ! Array of assumed OBL depths >0 at cell centers [m]
-                 surfBuoy,                    & ! surface Buoyancy flux surface to OBL_depth
-                 StokesXI,                    & ! Stokes similarity parameter given OBL_depth
-                 BEdE_ER                        ! Parameterized Entrainment Rule given OBL_depth
-  real(cvmix_r8),  intent(in)    :: uStar       ! surface friction velocity [m s-1]
-  real(cvmix_r8),  intent(in)    :: Bsfc_ns     ! non-solar surface buoyancy flux boundary condition
-
-  type(cvmix_kpp_params_type), optional, target, intent(in) :: CVmix_kpp_params_user
-
-! !OUTPUT PARAMETERS:
-  real(cvmix_r8),  intent(out)   :: ERdepth      ! ER Boundary Layer Depth [m]
-
-!EOP
-!BOC
-
-  ! Local variables
-  integer ::  iz, nlev , kbl , kinv
-  real(cvmix_r8), dimension(size(OBL_depth)+1) :: zdepth, BEdE ! surface then cell-centers<0
-  real(cvmix_r8), dimension(size(z_inter)+1)   :: sigma, Bflux   ! interface values
-  real(cvmix_r8) :: ws_i, Cemp_Rs, Gsig_i, Fdelrho, Bnonlocal, sigE, maxNsq, BEnt
-  real(kind=cvmix_r8), dimension(4)            :: coeffs
-  type(cvmix_kpp_params_type), pointer :: CVmix_kpp_params_in
-
-  CVmix_kpp_params_in => CVmix_kpp_params_saved
-    if (present(CVmix_kpp_params_user)) then
-      CVmix_kpp_params_in => CVmix_kpp_params_user
-    end if
-
-  nlev      = size(OBL_depth)
-  Cemp_Rs   = 4.7_cvmix_r8
-  Fdelrho   = cvmix_one
-  maxNsq    = 0.0
-  do kbl = 2, nlev+1
-   if ( Nsq(kbl) > maxNsq ) then
-     kinv = kbl
-     maxNsq = Nsq(kbl)
-   endif
-  enddo
-
-!                             Set default output values (no solution)
-  ERdepth   = -cvmix_one
-!                             Set surface values
-  zdepth(1) = cvmix_zero
-  BEdE(1)   = cvmix_zero
-  sigma(:)  = cvmix_zero
-  Bflux(1)  = Bsfc_ns    ! non-solar surface buoyancy boundary condition for all kbl
-!                             Set OBL_depth(1)=top cell center values
-  zdepth(2) = -OBL_depth(1)
-  BEdE(2)   = cvmix_zero
-
-  do kbl = 2, nlev
-    zdepth(kbl+1)= -OBL_depth(kbl)
-    BEdE(kbl+1)  = cvmix_zero
-
-    sigma(kbl+1) = cvmix_one
-    Bflux(kbl+1) = cvmix_zero
-    sigma(kbl+2) = -z_inter(kbl+1)/OBL_depth(kbl)  ! > 1.0
-    Bflux(kbl+2) = cvmix_zero
-    Bnonlocal    = 0.5_cvmix_r8 * Cemp_Rs * (abs(surfBuoy(kbl)) - surfBuoy(kbl))
-
-    do iz = kbl,1,-1
-      if (iz .gt. 1) then
-        sigma(iz) = -z_inter(iz)/OBL_depth(kbl)    ! < 1.0
-        call cvmix_kpp_compute_turbulent_scales(sigma(iz), OBL_depth(kbl), surfBuoy(kbl), uStar, StokesXI(kbl), & !0d
-                     w_s=ws_i   ,   CVmix_kpp_params_user=CVmix_kpp_params_user)
-        Gsig_i   = cvmix_kpp_composite_shape(sigma(iz))
-        Bflux(iz) = Gsig_i * (OBL_depth(kbl) * ws_i * Nsq(iz) - Bnonlocal)
-      endif
-
-      ! find the peak
-      if ( (Bflux(iz+1) .gt. Bflux(iz+2)) .and. (Bflux(iz+1) .ge. Bflux(iz)) .and. &
-           (Bflux(iz+1) .gt. cvmix_zero) ) then
-        ! Find sigE (the root of the derivative of the quadratic polynomial
-        ! interpolating (sigma(i), Bflux(i)) for i in [iz, iz+1, iz+2])
-        ! Also find BEnt (value of quadratic at sigE)
-        ! call cvmix_math_poly_interp(coeffs, sigma(iz:iz+2), Bflux(iz:iz+2)) 
-        ! comment by Aakash: the above is the original line, 
+        ! call cvmix_math_poly_interp(coeffs, sigma(iz:iz+2), Bflux(iz:iz+2))
+        ! comment by Aakash: the above is the original line,
         ! it gives me errors so I changed it to below call. not sure if it is correct
         call cvmix_math_poly_interp(coeffs, CVMIX_MATH_INTERP_QUAD,           &
                                     sigma(iz:iz+1), Bflux(iz:iz+1),           &
